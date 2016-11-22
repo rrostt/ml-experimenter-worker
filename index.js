@@ -6,14 +6,13 @@ var psTree = require('ps-tree');
 var io = require('socket.io-client');
 var path = require('path');
 
-var config;
-
-var configPath = process.argv.length>=3 ? process.argv[2] : './config.json';
+var configPath = process.argv.length >= 3 ? process.argv[2] : './config.json';
 if (!configPath.startsWith('/') && !configPath.startsWith('.')) {
   configPath = path.join(process.env.PWD, configPath);
 }
 
-console.log(configPath);
+var config;
+
 try {
   config = require(configPath);
 } catch (e) {
@@ -26,7 +25,7 @@ try {
 
 config.id = config.machineId || new Date().getTime();
 
-var socket = io('http://localhost:1234');
+var socket = io(config.host);
 
 const pwd = './src/';
 
@@ -143,7 +142,7 @@ socket.on('stop', function () {
   processes.forEach((process) => {
     console.log('stopping process');
     psTree(process.pid, function (err, children) {
-      childProcess.spawn('kill', ['-2'].concat(children.map(function (p) { return p.PID })));
+      childProcess.spawn('kill', ['-2'].concat(children.map(function (p) { return p.PID; })));
     });
   });
   processes.splice(0);
