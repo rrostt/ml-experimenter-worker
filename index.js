@@ -4,15 +4,37 @@ var childProcess = require('child_process');
 var spawn = childProcess.spawn;
 var psTree = require('ps-tree');
 var io = require('socket.io-client');
+var path = require('path');
+
+var config;
+
+var configPath = process.argv.length>=3 ? process.argv[2] : './config.json';
+if (!configPath.startsWith('/') && !configPath.startsWith('.')) {
+  configPath = path.join(process.env.PWD, configPath);
+}
+
+console.log(configPath);
+try {
+  config = require(configPath);
+} catch (e) {
+  console.log(e);
+  config = {
+    host: 'http://localhost:1234',
+    machineId: 'nc-' + new Date().getTime(),
+  };
+}
+
+config.id = config.machineId || new Date().getTime();
 
 var socket = io('http://localhost:1234');
 
 const pwd = './src/';
 
-var state = {
+var state = Object.assign({
+  id: config.machineId,
   runStatus: 'idle',
   syncStatus: 'idle',
-};
+}, config);
 
 function setState(perm) {
   Object.assign(state, perm);
