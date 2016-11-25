@@ -47,7 +47,10 @@ var fetcher = (function () {
   var fetching = false;
 
   function fetch(data) {
-    if (fetching) return false;
+    if (fetching) {
+      console.log('fetching in progress');
+      return false;
+    }
 
     fetching = true;
     setState({ syncStatus: 'syncing' });
@@ -62,7 +65,7 @@ var fetcher = (function () {
     var buf = data.buf;
     var mode = data.mode;
 
-    // console.log('incoming file', name, buf);
+    console.log('incoming file', name);
     var filepath = path.join(pwd, name);
     fs.mkdirs(path.dirname(filepath), () => {
       fs.writeFile(filepath, buf, (err) => {
@@ -83,6 +86,7 @@ var fetcher = (function () {
       statuses.push(success);
 
       if (toFetch.length === 0) {
+        fetching = false;
         var syncSuccess = statuses.reduce((s, x) => s & x, true);
         setState({ syncStatus: syncSuccess ? 'success' : 'error' });
         socket.emit('fetch-complete', syncSuccess);
@@ -153,7 +157,7 @@ socket.on('sync', (data) => {
   console.log('sync', data);
 
   // TODO: check what files we need to fetch
-  socket.emit('fetch', data);
+  fetcher.fetch(data);
 });
 
 socket.on('disconnect', function () {
