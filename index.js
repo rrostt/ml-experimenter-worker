@@ -25,7 +25,9 @@ try {
 
 config.id = config.machineId || new Date().getTime();
 
-var socket = io(config.host);
+//var socket = io(config.host, { secure: config.host.startsWith('https') });
+//var socket = io(config.host);
+var socket = io.connect(config.host);
 
 const pwd = './src/';
 
@@ -66,7 +68,7 @@ var fetcher = (function () {
     var mode = data.mode;
 
     console.log('incoming file', name);
-    var filepath = path.join(pwd, name);
+    var filepath = path.join(__dirname, pwd, name);
     fs.mkdirs(path.dirname(filepath), () => {
       fs.writeFile(filepath, buf, (err) => {
         if (err) {
@@ -105,6 +107,8 @@ var running = false;
 // Add a connect listener
 socket.on('connect', function () {
   console.log('Connected!');
+
+  console.log(socket.io.engine.transport.name);
 
   socket.emit('worker-connected', state);
 });
