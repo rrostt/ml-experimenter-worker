@@ -123,12 +123,19 @@ socket.on('run', function (data) {
 
   var args = cmd.split(' ');
   var arg0 = args.shift();
-  var process = spawn(arg0, args, { cwd: path.join(__dirname, pwd) });
+  try {
+    var process = spawn(arg0, args, { cwd: path.join(__dirname, pwd) });
+  } catch (e) {
+    console.log('spawn exception', e);
+    socket.emit('stderr', JSON.stringify(e, null, '  '));
+    return;
+  }
   processes.push(process);
   running = true;
   setState({ runStatus: 'running' });
 
   process.on('error', err => {
+    console.log('process error', err);
     socket.emit('stderr', JSON.stringify(err, null, '  '));
   });
   process.stdout.on('data', (data) => {
