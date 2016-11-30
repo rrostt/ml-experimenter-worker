@@ -25,8 +25,6 @@ try {
 
 config.id = config.machineId || new Date().getTime();
 
-//var socket = io(config.host, { secure: config.host.startsWith('https') });
-//var socket = io(config.host);
 var socket = io.connect(config.host);
 
 const pwd = './src/';
@@ -130,6 +128,9 @@ socket.on('run', function (data) {
   running = true;
   setState({ runStatus: 'running' });
 
+  process.on('error', err => {
+    socket.emit('stderr', JSON.stringify(err, null, '  '));
+  });
   process.stdout.on('data', (data) => {
     socket.emit('stdout', '' + data);
   });
@@ -138,6 +139,7 @@ socket.on('run', function (data) {
     console.log(`stderr: ${data}`);
   });
   process.on('close', (code) => {
+    console.log('process closed');
     socket.emit('data', '<< CLOSED >>');
     processes.splice(processes.indexOf(process), 1);
     running = false;
