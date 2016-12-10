@@ -5,6 +5,8 @@ var spawn = childProcess.spawn;
 var psTree = require('ps-tree');
 var io = require('socket.io-client');
 var path = require('path');
+var lsSync = require('./lsSync');
+var parseArgs = require('parse-spawn-args').parse;
 
 var configPath = process.argv.length >= 3 ? process.argv[2] : './config.json';
 if (!configPath.startsWith('/') && !configPath.startsWith('.')) {
@@ -27,7 +29,7 @@ config.id = config.machineId || new Date().getTime();
 
 var socket = io.connect(config.host);
 
-const pwd = './src/';
+const pwd = path.join(__dirname, './src/');
 
 var state = Object.assign({
   id: config.machineId,
@@ -55,26 +57,44 @@ var fetcher = (function () {
     fetching = true;
     setState({ syncStatus: 'syncing' });
 
-    toFetch = data;
+    var existing = lsSync(pwd);
 
-    socket.emit('fetch', toFetch);
+    toFetch = data.filter(candidate => {
+      var existingFile = existing.find(e => e.name === candidate.name);
+      return !existingFile || existingFile.mtime !== candidate.mtime;
+    });
+
+    console.log('files to fetch', toFetch);
+
+    if (toFetch.length > 0) {
+      socket.emit('fetch', toFetch);
+    } else {
+      fetchingComplete(true);
+    }
   }
 
   socket.on('file', (data) => {
     var name = data.name;
     var buf = data.buf;
     var mode = data.mode;
+    var mtime = data.mtime;
 
     console.log('incoming file', name);
-    var filepath = path.join(__dirname, pwd, name);
+    var filepath = path.join(pwd, name);
     fs.mkdirs(path.dirname(filepath), () => {
       fs.writeFile(filepath, buf, (err) => {
         if (err) {
           status(false);
         } else {
           fs.chmod(filepath, mode, () => {
-            console.log('file saved', name);
-            status(true);
+            fs.utimes(filepath, Date.now() / 1000, mtime / 1000, (err) => {
+              if (err) {
+                console.log('error setting mtime...', err);
+              }
+
+              console.log('file saved', name);
+              status(true);
+            });
           });
         }
       });
@@ -86,13 +106,17 @@ var fetcher = (function () {
       statuses.push(success);
 
       if (toFetch.length === 0) {
-        fetching = false;
         var syncSuccess = statuses.reduce((s, x) => s & x, true);
-        setState({ syncStatus: syncSuccess ? 'success' : 'error' });
-        socket.emit('fetch-complete', syncSuccess);
+        fetchingComplete(syncSuccess);
       }
     }
   });
+
+  function fetchingComplete(success) {
+    fetching = false;
+    setState({ syncStatus: success ? 'success' : 'error' });
+    socket.emit('fetch-complete', success);
+  }
 
   return {
     fetch: fetch,
@@ -121,9 +145,9 @@ socket.on('run', function (data) {
 
   console.log('spawning process');
 
-  var args = cmd.split(' ');
+  var args = parseArgs(cmd); //cmd.split(' ');
   var arg0 = args.shift();
-  var process = spawn(arg0, args, { cwd: path.join(__dirname, pwd) });
+  var process = spawn(arg0, args, { cwd: pwd });
   processes.push(process);
   running = true;
   setState({ runStatus: 'running' });
@@ -160,7 +184,7 @@ socket.on('stop', function () {
 
 socket.on('sync', (data) => {
   // data contains status on the files to sync
-  console.log('sync', data);
+  console.log('sync');
 
   // TODO: check what files we need to fetch
   fetcher.fetch(data);
