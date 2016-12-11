@@ -12,6 +12,7 @@
     "node-fs-extra": "^0.8.1",
     "parse-spawn-args": "^1.0.2",
     "ps-tree": "^1.1.0",
+    "socket.io": "^1.7.2",
     "socket.io-client": "^1.5.1"
   }
 }

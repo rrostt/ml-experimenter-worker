@@ -1,10 +1,9 @@
 var fs = require('node-fs-extra');
 var path = require('path');
-var childProcess = require('child_process');
-var spawn = childProcess.spawn;
+var spawn = require('child_process').spawn;
 var psTree = require('ps-tree');
 var io = require('socket.io-client');
-var path = require('path');
+var socketio = require('socket.io');
 var lsSync = require('./lsSync');
 var parseArgs = require('parse-spawn-args').parse;
 
@@ -27,8 +26,6 @@ try {
 
 config.id = config.machineId || new Date().getTime();
 
-var socket = io.connect(config.host);
-
 const pwd = path.join(__dirname, './src/');
 
 var state = Object.assign({
@@ -37,171 +34,193 @@ var state = Object.assign({
   syncStatus: 'idle',
 }, config);
 
-function setState(perm) {
-  Object.assign(state, perm);
+if (config.host) {
+  var socket = io.connect(config.host);
 
-  socket.emit('state-change', state);
+  // Add a connect listener
+  socket.on('connect', function () {
+    console.log('Connected!');
+
+    console.log(socket.io.engine.transport.name);
+
+    socket.emit('worker-connected', state);
+  });
+
+  initSocket(socket);
+} else if (config.port) {
+  var httpServer = require('http').createServer().listen(+config.port, () => {
+    var server = socketio.listen(httpServer);
+    server.on('connection', socket => {
+      initSocket(socket);
+
+      socket.emit('worker-connected', state);
+    });
+
+    console.log('listening on port ' + config.port);
+  });
+} else {
+  console.log('ERROR: either host or port must be set. Exiting');
 }
 
-var fetcher = (function () {
-  var toFetch = [];
-  var statuses = [];
-  var fetching = false;
+function initSocket(socket) {
+  console.log('initialising socket');
 
-  function fetch(data) {
-    if (fetching) {
-      console.log('fetching in progress');
-      return false;
-    }
+  function setState(perm) {
+    Object.assign(state, perm);
 
-    fetching = true;
-    setState({ syncStatus: 'syncing' });
-
-    var existing = lsSync(pwd);
-
-    toFetch = data.filter(candidate => {
-      var existingFile = existing.find(e => e.name === candidate.name);
-      return !existingFile || existingFile.mtime !== candidate.mtime;
-    });
-
-    console.log('files to fetch', toFetch);
-
-    if (toFetch.length > 0) {
-      socket.emit('fetch', toFetch);
-    } else {
-      fetchingComplete(true);
-    }
+    socket.emit('state-change', state);
   }
 
-  socket.on('file', (data) => {
-    var name = data.name;
-    var buf = data.buf;
-    var mode = data.mode;
-    var mtime = data.mtime;
+  var fetcher = (function () {
+    var toFetch = [];
+    var statuses = [];
+    var fetching = false;
 
-    console.log('incoming file', name);
-    var filepath = path.join(pwd, name);
-    fs.mkdirs(path.dirname(filepath), () => {
-      fs.writeFile(filepath, buf, (err) => {
-        if (err) {
-          status(false);
-        } else {
-          fs.chmod(filepath, mode, () => {
-            fs.utimes(filepath, Date.now() / 1000, mtime / 1000, (err) => {
-              if (err) {
-                console.log('error setting mtime...', err);
-              }
+    function fetch(data) {
+      if (fetching) {
+        console.log('fetching in progress');
+        return false;
+      }
 
-              console.log('file saved', name);
-              status(true);
-            });
-          });
-        }
+      fetching = true;
+      setState({ syncStatus: 'syncing' });
+
+      var existing = lsSync(pwd);
+
+      toFetch = data.filter(candidate => {
+        var existingFile = existing.find(e => e.name === candidate.name);
+        return !existingFile || existingFile.mtime !== candidate.mtime;
       });
-    });
 
-    function status(success) {
-      var i = toFetch.findIndex(f => f.name == name);
-      toFetch.splice(i, 1);
-      statuses.push(success);
+      console.log('files to fetch', toFetch);
 
-      if (toFetch.length === 0) {
-        var syncSuccess = statuses.reduce((s, x) => s & x, true);
-        fetchingComplete(syncSuccess);
+      if (toFetch.length > 0) {
+        socket.emit('fetch', toFetch);
+      } else {
+        fetchingComplete(true);
       }
     }
-  });
 
-  function fetchingComplete(success) {
-    fetching = false;
-    setState({ syncStatus: success ? 'success' : 'error' });
-    socket.emit('fetch-complete', success);
-  }
+    socket.on('file', (data) => {
+      var name = data.name;
+      var buf = data.buf;
+      var mode = data.mode;
+      var mtime = data.mtime;
 
-  return {
-    fetch: fetch,
-  };
-})();
+      console.log('incoming file', name);
+      var filepath = path.join(pwd, name);
+      fs.mkdirs(path.dirname(filepath), () => {
+        fs.writeFile(filepath, buf, (err) => {
+          if (err) {
+            status(false);
+          } else {
+            fs.chmod(filepath, mode, () => {
+              fs.utimes(filepath, Date.now() / 1000, mtime / 1000, (err) => {
+                if (err) {
+                  console.log('error setting mtime...', err);
+                }
 
-var processes = [];
-var running = false;
+                console.log('file saved', name);
+                status(true);
+              });
+            });
+          }
+        });
+      });
 
-// Add a connect listener
-socket.on('connect', function () {
-  console.log('Connected!');
+      function status(success) {
+        var i = toFetch.findIndex(f => f.name == name);
+        toFetch.splice(i, 1);
+        statuses.push(success);
 
-  console.log(socket.io.engine.transport.name);
+        if (toFetch.length === 0) {
+          var syncSuccess = statuses.reduce((s, x) => s & x, true);
+          fetchingComplete(syncSuccess);
+        }
+      }
+    });
 
-  socket.emit('worker-connected', state);
-});
+    function fetchingComplete(success) {
+      fetching = false;
+      setState({ syncStatus: success ? 'success' : 'error' });
+      socket.emit('fetch-complete', success);
+    }
 
-socket.on('run', function (data) {
-  var cmd = data.cmd;
+    return {
+      fetch: fetch,
+    };
+  })();
 
-  if (running) {
-    console.log('already running');
-    return;
-  }
+  var processes = [];
+  var running = false;
 
-  console.log('spawning process');
+  socket.on('run', function (data) {
+    var cmd = data.cmd;
 
-  var args = parseArgs(cmd); //cmd.split(' ');
-  var arg0 = args.shift();
+    if (running) {
+      console.log('already running');
+      return;
+    }
 
-  try {
-    var process = spawn(arg0, args, { cwd: pwd });
-  } catch (e) {
-    console.log('spawn exception', e);
-    socket.emit('stderr', JSON.stringify(e, null, '  '));
-    return;
-  }
+    console.log('spawning process');
 
-  processes.push(process);
-  running = true;
-  setState({ runStatus: 'running' });
+    var args = parseArgs(cmd); //cmd.split(' ');
+    var arg0 = args.shift();
 
-  process.on('error', err => {
-    console.log('process error', err);
-    socket.emit('stderr', JSON.stringify(err, null, '  '));
-  });
-  process.stdout.on('data', (data) => {
-    socket.emit('stdout', '' + data);
-  });
-  process.stderr.on('data', (data) => {
-    socket.emit('stderr', '' + data);
-    console.log(`stderr: ${data}`);
-  });
-  process.on('close', (code) => {
-    console.log('process closed');
-    socket.emit('data', '<< CLOSED >>');
-    processes.splice(processes.indexOf(process), 1);
-    running = false;
-    setState({ runStatus: 'idle' });
-  });
-});
+    try {
+      var process = spawn(arg0, args, { cwd: pwd });
+    } catch (e) {
+      console.log('spawn exception', e);
+      socket.emit('stderr', JSON.stringify(e, null, '  '));
+      return;
+    }
 
-socket.on('stop', function () {
-  console.log('stopping');
-  processes.forEach((process) => {
-    console.log('stopping process');
-    psTree(process.pid, function (err, children) {
-      childProcess.spawn('kill', ['-2'].concat(children.map(function (p) { return p.PID; })));
+    processes.push(process);
+    running = true;
+    setState({ runStatus: 'running' });
+
+    process.on('error', err => {
+      console.log('process error', err);
+      socket.emit('stderr', JSON.stringify(err, null, '  '));
+    });
+    process.stdout.on('data', (data) => {
+      socket.emit('stdout', '' + data);
+    });
+    process.stderr.on('data', (data) => {
+      socket.emit('stderr', '' + data);
+      console.log(`stderr: ${data}`);
+    });
+    process.on('close', (code) => {
+      console.log('process closed');
+      socket.emit('data', '<< CLOSED >>');
+      processes.splice(processes.indexOf(process), 1);
+      running = false;
+      setState({ runStatus: 'idle' });
     });
   });
-  processes.splice(0);
-});
 
-socket.on('sync', (data) => {
-  // data contains status on the files to sync
-  console.log('sync');
-
-  // TODO: check what files we need to fetch
-  fetcher.fetch(data);
-});
-
-socket.on('disconnect', function () {
-  console.log('disconnected');
-  processes.forEach((process) => {
-    process.kill();
+  socket.on('stop', function () {
+    console.log('stopping');
+    processes.forEach((process) => {
+      console.log('stopping process');
+      psTree(process.pid, function (err, children) {
+        spawn('kill', ['-2'].concat(children.map(function (p) { return p.PID; })));
+      });
+    });
+    processes.splice(0);
   });
-});
+
+  socket.on('sync', (data) => {
+    // data contains status on the files to sync
+    console.log('sync');
+
+    fetcher.fetch(data);
+  });
+
+  socket.on('disconnect', function () {
+    console.log('disconnected');
+    processes.forEach((process) => {
+      process.kill();
+    });
+  });
+}
