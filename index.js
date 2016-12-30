@@ -35,7 +35,7 @@ var state = Object.assign({
 }, config);
 
 if (config.host) {
-  var socket = io.connect(config.host);
+  var socket = io.connect(config.host, { rejectUnauthorized: false });
 
   // Add a connect listener
   socket.on('connect', function () {
